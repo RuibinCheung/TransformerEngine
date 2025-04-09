@@ -103,7 +103,6 @@ class _Linear(torch.autograd.Function):
 
         # Cast input to expected dtype
         inputmat = cast_if_needed(inputmat, activation_dtype)
-        inputmat_t = None
         inputmat_no_fp8 = inputmat
         inputmat_scale_inv = None
 
@@ -120,7 +119,7 @@ class _Linear(torch.autograd.Function):
                     and not sequence_parallel
                 ):
                     # FP8 input for forward, FP8 input transpose for backward wgrad
-                    inputmat, inputmat_t = fp8_cast_transpose_fused(
+                    inputmat, _ = fp8_cast_transpose_fused(
                         inputmat,
                         fp8_meta["scaling_fwd"],
                         tex.FP8FwdTensors.GEMM1_INPUT,
@@ -292,15 +291,9 @@ class _Linear(torch.autograd.Function):
 
         if is_grad_enabled:
             saved_inputmat = None
-            saved_inputmat_t = None
             if weight.requires_grad:
                 if fp8 and not fp8_meta["recipe"].override_linear_precision.wgrad:
-                    if inputmat_t is None:
-                        saved_inputmat = inputmat
-                    else:
-                        saved_inputmat_t = inputmat_t
-                        if cpu_offloading:
-                            saved_inputmat_t.activation_offloading = True
+                    saved_inputmat = inputmat
                 else:
                     saved_inputmat = inputmat_no_fp8
 
@@ -318,13 +311,11 @@ class _Linear(torch.autograd.Function):
             ctx.fsdp_shapes = _fsdp_scatter_tensors(
                 fsdp_group,
                 saved_inputmat,  # None if fp8 == False
-                saved_inputmat_t,  # None if fp8 == False AND not is_grad_enabled
                 weight_fp8 if fp8 and not isinstance(weight, Float8Tensor) else None,
             )
 
             ctx.save_for_backward(
                 saved_inputmat,
-                saved_inputmat_t,
                 inputmat_scale_inv,
                 weight,
                 weight_fp8,
@@ -377,7 +368,6 @@ class _Linear(torch.autograd.Function):
         with torch.cuda.nvtx.range("_Linear_backward"):
             (
                 inputmat,
-                inputmat_t,
                 inputmat_scale_inv,
                 weight,
                 weight_fp8,
@@ -391,7 +381,6 @@ class _Linear(torch.autograd.Function):
                 ctx.fsdp_group,
                 ctx.fsdp_shapes,
                 inputmat,
-                inputmat_t,
                 weight_fp8 if ctx.fp8 and not isinstance(weight, Float8Tensor) else None,
             )
 
@@ -423,7 +412,6 @@ class _Linear(torch.autograd.Function):
             # Column Parallel Linear
             # Overlap input AG with dgrad
             inputmat_total = None
-            inputmat_t_total = None
             handle = None
             if weight.requires_grad and ctx.parallel_mode == "column" and ctx.sequence_parallel:
                 inputmat_total, handle = gather_along_first_dim(
@@ -431,7 +419,6 @@ class _Linear(torch.autograd.Function):
                 )
             else:
                 inputmat_total = inputmat
-                inputmat_t_total = inputmat_t
 
             if ctx.is_first_microbatch is not None:
                 accumulate_wgrad_into_param_main_grad = (
@@ -518,28 +505,16 @@ class _Linear(torch.autograd.Function):
                 if ctx.fp8:
                     # WGRAD
                     if not ctx.fp8_meta["recipe"].override_linear_precision.wgrad:
-                        if ctx.ub_overlap_ag:
-                            if isinstance(grad_output_c, Float8Tensor):
-                                grad_output_t = grad_output_c.transpose_2d()
-                            else:
-                                grad_output_t = tex.fp8_transpose(grad_output_c, fp8_dtype_backward)
-                        if inputmat_t_total is None:
-                            if isinstance(inputmat_total, Float8Tensor):
-                                inputmat_t_total = inputmat_total.transpose_2d()
-                            else:
-                                inputmat_t_total = tex.fp8_transpose(
-                                    inputmat_total, fp8_dtype_backward
-                                )
                         wgrad, _ = fp8_gemm(
                             (
-                                inputmat_t_total._data
-                                if isinstance(inputmat_t_total, Float8Tensor)
-                                else inputmat_t_total
+                                inputmat_total._data
+                                if isinstance(inputmat_total, Float8Tensor)
+                                else inputmat_total
                             ),
                             inputmat_scale_inv,
                             0,
                             fp8_dtype_forward,
-                            grad_output_t,
+                            grad_output_c,
                             ctx.fp8_meta["scaling_bwd"].scale_inv,
                             tex.FP8BwdTensors.GRAD_OUTPUT1,
                             fp8_dtype_backward,
@@ -548,6 +523,7 @@ class _Linear(torch.autograd.Function):
                             accumulate=accumulate_wgrad_into_param_main_grad,
                             out=weight.main_grad if ctx.fuse_wgrad_accumulation else None,
                             use_split_accumulator=_2X_ACC_WGRAD,
+                            layout="NT",
                         )
                     else:
                         wgrad, _, _ = gemm(
@@ -576,7 +552,6 @@ class _Linear(torch.autograd.Function):
 
                 # Deallocate input tensor
                 clear_tensor_data(inputmat_total)
-                clear_tensor_data(inputmat_t_total)
 
             # Column Parallel Linear
             if ctx.parallel_mode == "column" and ctx.tensor_parallel and handle is not None:
@@ -968,16 +943,7 @@ class Linear(TransformerEngineBaseModule):
             # Initialize FP8 weights if needed
             weight_fp8 = None
             if self.fp8:
-                if isinstance(weight_tensor, Float8Tensor):
-                    # Make sure transpose cache is valid, if present
-                    # Note: Transpose cache may have been invalidated
-                    # externally, e.g. by optimizer.
-                    if weight_tensor._transpose is not None:
-                        weight_tensor.transpose_2d(
-                            fill_cache=True,
-                            noop_flag=skip_fp8_weight_update,
-                        )
-                else:
+                if not isinstance(weight_tensor, Float8Tensor):
                     # FP8 cast to workspace buffer
                     update_workspace = is_first_microbatch is None or is_first_microbatch
                     weight_fp8 = self.get_fp8_workspace(
