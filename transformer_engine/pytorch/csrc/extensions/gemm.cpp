@@ -212,7 +212,8 @@ void te_grouped_gemm_single_output(
         GetTransformerEngineDType(pre_gelu_out[i].scalar_type()), nullptr, nullptr, nullptr));
     // Move the D pointer to the next split.
     char* char_ptr = reinterpret_cast<char*>(d_i_ptr);
-    char_ptr += m_splits[i] * A[i].size(0) * D.element_size();
+    const int n = transa ? A[i].size(0) : A[i].size(1);
+    char_ptr += m_splits[i] * n * D.element_size();
     d_i_ptr = reinterpret_cast<void*>(char_ptr);
   }
   for (size_t i = 0; i < workspace.size(); i++) {

@@ -87,7 +87,6 @@ class _GroupedLinear(torch.autograd.Function):
         # Cast input to expected dtype
         inputmats_no_fp8 = [cast_if_needed(mat, activation_dtype) for mat in inputmats]
         inputmats = []
-        inputmats_t = []
         inputmat_scale_inv = None
 
         if fp8:
@@ -103,7 +102,7 @@ class _GroupedLinear(torch.autograd.Function):
                 indices = list(
                     range(fp8_meta_offsets["input"], fp8_meta_offsets["input"] + num_gemms)
                 )
-                inputmats, inputmats_t = fp8_multi_cast_transpose_fused(
+                inputmats, _ = fp8_multi_cast_transpose_fused(
                     inputmats_no_fp8,
                     fp8_meta["scaling_fwd"],
                     indices,  # scale_indices
@@ -209,16 +208,9 @@ class _GroupedLinear(torch.autograd.Function):
 
         if is_grad_enabled:
             saved_inputmats = [None] * num_gemms
-            saved_inputmats_t = [None] * num_gemms
             if weights[0].requires_grad:
                 if fp8 and not fp8_meta["recipe"].override_linear_precision.wgrad:
-                    if not inputmats_t:
-                        saved_inputmats = inputmats
-                    else:
-                        saved_inputmats_t = inputmats_t
-                        if cpu_offloading:
-                            for t in saved_inputmats_t:
-                                t.activation_offloading = True
+                    saved_inputmats = inputmats
                 else:
                     saved_inputmats = inputmats_no_fp8
 
@@ -236,7 +228,6 @@ class _GroupedLinear(torch.autograd.Function):
             ctx.save_for_backward(
                 inputmat_scale_inv,
                 *saved_inputmats,
-                *saved_inputmats_t,
                 *weights,
                 *weights_fp8,
                 *[
@@ -276,10 +267,9 @@ class _GroupedLinear(torch.autograd.Function):
                 *saved_tensors,
             ) = ctx.saved_tensors
             inputmats = saved_tensors[: ctx.num_gemms]
-            inputmats_t = saved_tensors[ctx.num_gemms : 2 * ctx.num_gemms]
-            weights = saved_tensors[2 * ctx.num_gemms : 3 * ctx.num_gemms]
-            weights_fp8 = saved_tensors[3 * ctx.num_gemms : 4 * ctx.num_gemms]
-            main_grads = saved_tensors[4 * ctx.num_gemms :]
+            weights = saved_tensors[1 * ctx.num_gemms : 2 * ctx.num_gemms]
+            weights_fp8 = saved_tensors[2 * ctx.num_gemms : 3 * ctx.num_gemms]
+            main_grads = saved_tensors[3 * ctx.num_gemms :]
             if ctx.cpu_offloading and ctx.fuse_wgrad_accumulation:
                 for i in ctx.num_gemms:
                     w = torch.nn.Parameter(weights[i], weights[i].requires_grad)
@@ -292,14 +282,13 @@ class _GroupedLinear(torch.autograd.Function):
                 grad_output.view(-1, grad_output.shape[-1]), ctx.m_splits
             )
             grad_output_c = [None] * ctx.num_gemms
-            grad_output_t = [None] * ctx.num_gemms
             grad_biases = [None] * ctx.num_gemms
             if ctx.fp8:
                 fp8_dtype_forward = get_fp8_te_dtype(ctx.fp8_meta["recipe"], fprop_tensor=True)
                 fp8_dtype_backward = get_fp8_te_dtype(ctx.fp8_meta["recipe"], fprop_tensor=False)
                 if ctx.use_bias:
                     for i in range(ctx.num_gemms):
-                        grad_biases[i], grad_output_c[i], grad_output_t[i] = (
+                        grad_biases[i], grad_output_c[i], _ = (
                             fp8_cast_transpose_bgrad_fused(
                                 grad_output_mats[i],
                                 ctx.fp8_meta["scaling_bwd"],
@@ -315,7 +304,7 @@ class _GroupedLinear(torch.autograd.Function):
                                 ctx.fp8_meta_offsets["grad_output"] + ctx.num_gemms,
                             )
                         )
-                        grad_output_c, grad_output_t = fp8_multi_cast_transpose_fused(
+                        grad_output_c, _ = fp8_multi_cast_transpose_fused(
                             grad_output_mats,
                             ctx.fp8_meta["scaling_bwd"],
                             indices,  # scale_indices
@@ -347,7 +336,7 @@ class _GroupedLinear(torch.autograd.Function):
                         device=grad_output.device,
                     )
                     fp8_grouped_gemm(
-                        [w.transpose_2d() for w in weights_fp8],
+                        [w._data for w in weights_fp8],
                         [w._scale_inv for w in weights_fp8],
                         0,  # weight offset is 0 for the newly created _scale_inv
                         weights_fp8[0]._fp8_dtype,
@@ -358,6 +347,7 @@ class _GroupedLinear(torch.autograd.Function):
                         [dgrad],
                         ctx.activation_dtype,
                         get_multi_stream_cublas_workspace(),
+                        layout="NN",
                         m_splits=ctx.m_splits,
                         use_split_accumulator=_2X_ACC_DGRAD,
                     )
@@ -388,23 +378,15 @@ class _GroupedLinear(torch.autograd.Function):
                 if ctx.fp8:
                     # WGRAD
                     if not ctx.fp8_meta["recipe"].override_linear_precision.wgrad:
-                        if inputmats_t[0] is None:
-                            for i in range(ctx.num_gemms):
-                                if isinstance(inputmats[i], Float8Tensor):
-                                    inputmats_t[i] = inputmats[i].transpose_2d()
-                                else:
-                                    inputmats_t[i] = tex.fp8_transpose(
-                                        inputmats[i], fp8_dtype_backward
-                                    )
                         fp8_grouped_gemm(
                             [
                                 inp._data if isinstance(inp, Float8Tensor) else inp
-                                for inp in inputmats_t
+                                for inp in inputmats
                             ],
                             [inputmat_scale_inv],
                             0,
                             fp8_dtype_forward,
-                            grad_output_t,
+                            grad_output_c,
                             ctx.fp8_meta["scaling_bwd"].scale_inv,
                             ctx.fp8_meta_offsets["grad_output"],
                             fp8_dtype_backward,
@@ -413,6 +395,7 @@ class _GroupedLinear(torch.autograd.Function):
                             get_multi_stream_cublas_workspace(),
                             accumulate=accumulate_wgrad_into_param_main_grad,
                             use_split_accumulator=_2X_ACC_WGRAD,
+                            layout="NT",
                         )
                     else:
                         grouped_gemm(
@@ -441,7 +424,6 @@ class _GroupedLinear(torch.autograd.Function):
 
                 # Deallocate input tensor
                 clear_tensor_data(*inputmats)
-                clear_tensor_data(*inputmats_t)
 
                 def handle_custom_ddp_from_mcore(w, wgrad):
                     if w.requires_grad:
@@ -730,16 +712,7 @@ class GroupedLinear(TransformerEngineBaseModule):
             weight_tensors_fp8 = [None] * self.num_gemms
             if self.fp8:
                 for i in range(self.num_gemms):
-                    if isinstance(weight_tensors[i], Float8Tensor):
-                        # Make sure transpose cache is valid, if present
-                        # Note: Transpose cache may have been invalidated
-                        # externally, e.g. by optimizer.
-                        if weight_tensors[i]._transpose is not None:
-                            weight_tensors[i].transpose_2d(
-                                fill_cache=True,
-                                noop_flag=skip_fp8_weight_update,
-                            )
-                    else:
+                    if not isinstance(weight_tensors[i], Float8Tensor):
                         # FP8 cast to workspace buffer
                         update_workspace = is_first_microbatch is None or is_first_microbatch
                         weight_tensors_fp8[i] = self.get_fp8_workspace(

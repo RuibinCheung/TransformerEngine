@@ -38,6 +38,7 @@ def fp8_gemm(
     workspace: torch.Tensor,
     gelu: bool = False,
     accumulate: bool = False,
+    layout: str = "TN",
     out: Optional[torch.Tensor] = None,
     out_index=None,
     fp8_meta_tensor: tex.FP8TensorMeta = None,
@@ -50,6 +51,9 @@ def fp8_gemm(
     extra_output_tensor: torch.Tensor = None,
 ) -> torch.Tensor:
     """TN layout GEMM with fp8 inputs."""
+    assert layout in ("TN", "NN", "NT"), f"GEMM layout {layout} not supported."
+    transa = layout[0] == "T"
+    transb = layout[1] == "T"
 
     empty_tensor = _empty_tensor()
     if D_dtype is not None and D_dtype in [tex.DType.kFloat8E4M3, tex.DType.kFloat8E5M2]:
@@ -61,8 +65,8 @@ def fp8_gemm(
 
     if out is None:
         out = torch.empty(
-            B.shape[0],
-            A.shape[0],
+            B.shape[1] if transb else B.shape[0],
+            A.shape[0] if transa else A.shape[1],
             dtype=out_dtype,
             device="cuda",
         )
@@ -85,12 +89,12 @@ def fp8_gemm(
         A_scale_inv,
         A_fp8_tensor,
         A_dtype,
-        True,  # transa
+        transa,
         B,
         B_scale_inv,
         B_fp8_tensor,
         B_dtype,
-        False,  # transb
+        transb,
         out,
         empty_tensor if out_index is None else fp8_meta_tensor.scale[out_index],
         out_dtype,
@@ -397,6 +401,7 @@ def fp8_grouped_gemm(
     fp8_meta_tensor: tex.FP8TensorMeta = None,
     gelu: bool = False,
     accumulate: bool = False,
+    layout: str = "TN",
     bias: Optional[List[torch.Tensor]] = None,
     use_bias: bool = False,
     use_split_accumulator: bool = False,
@@ -436,6 +441,10 @@ def fp8_grouped_gemm(
     gelu_input = empty_tensors
     out_dtype = TE_DType[out[0].dtype] if D_dtype is None else D_dtype
 
+    assert layout in ("TN", "NN", "NT"), f"GEMM layout {layout} not supported."
+    transa = layout[0] == "T"
+    transb = layout[1] == "T"
+
     if len(A_scale_inv) == 1:
         if gelu:
             gelu_input = [
@@ -448,12 +457,12 @@ def fp8_grouped_gemm(
             A_scale_inv[0],
             A_fp8_tensor_offset,
             A_dtype,
-            True,  # transa
+            transa,
             B,
             B_scale_inv,
             B_fp8_tensor_offset,
             B_dtype,
-            False,  # transb
+            transb,
             out,
             0 if out_offset is None else out_offset,
             empty_tensor if out_offset is None else fp8_meta_tensor.scale,
@@ -477,12 +486,12 @@ def fp8_grouped_gemm(
             A_scale_inv,
             A_fp8_tensor_offset,
             A_dtype,
-            True,  # transa
+            transa,
             B,
             B_scale_inv,
             B_fp8_tensor_offset,
             B_dtype,
-            False,  # transb
+            transb,
             m_splits,
             out[0],
             0 if out_offset is None else out_offset,
