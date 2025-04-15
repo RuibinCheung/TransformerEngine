@@ -2088,6 +2088,68 @@ def test_grouped_gemm(shape, dtype, layout, accumulate):
     for o, o_ref in zip(out, out_ref):
         torch.testing.assert_close(o, o_ref, rtol=0, atol=0)
 
+@pytest.mark.parametrize(
+    "test_case",
+    [
+        (32,1536,4096,768,"NT"),
+        (32,1536,4096,768,"NT"),
+        (32,4096,3072,768,"NT"),
+        (32,1536,768,4096,"NN"),
+        (32,3072,768,4096,"TN"),
+        (32,4096,768,1536,"TN"),
+        (32,4096,768,3072,"NN"),
+        (16,1536,4096,768,"NT"),
+        (16,4096,3072,768,"NT"),
+        (16,1536,768,4096,"NN"),
+        (16,3072,768,4096,"TN"),
+        (16,4096,768,1536,"TN"),
+        (16,4096,768,3072,"NN"),
+        ( 8,1536,4096,768,"NT"),
+        ( 8,4096,3072,768,"NT"),
+        ( 8,1536,768,4096,"NN"),
+        ( 8,3072,768,4096,"TN"),
+        ( 8,4096,768,1536,"TN"),
+        ( 8,4096,768,3072,"NN"),
+    ],
+)
+def test_my_grouped_gemm(test_case):
+    accumulate = False
+    dtype = torch.bfloat16
+
+    # torch.manual_seed(0)
+    group_count, m, n, k, layout = test_case
+    
+    test_times = 5
+    for i in range(test_times):
+
+        if layout == "TN":
+            A = [torch.randn(m, k, dtype=dtype, device="cuda") for _ in range(group_count)]  # weight
+            B = [torch.randn(n, k, dtype=dtype, device="cuda") for _ in range(group_count)]  # weight
+            out = [torch.randn(m, n, dtype=dtype, device="cuda") for _ in range(group_count)]  # weight
+            grad = False
+        elif layout == "NN":
+            A = [torch.randn(k, m, dtype=dtype, device="cuda") for _ in range(group_count)]  # weight
+            B = [torch.randn(n, k, dtype=dtype, device="cuda") for _ in range(group_count)]  # grad_output
+            out = [ torch.randn(m, n, dtype=dtype, device="cuda") for _ in range(group_count)]  # dgrad
+            grad = False
+        else:  # layout == "NT"
+            A = [ torch.randn(k, m, dtype=dtype, device="cuda") for _ in range(group_count)]  # input
+            B = [ torch.randn(k, n, dtype=dtype, device="cuda") for _ in range(group_count)]  # input
+            out = [torch.randn(m, n, dtype=dtype, device="cuda") for _ in range(group_count)]  # wgrad
+            grad = False
+
+        grouped_gemm(
+            A,
+            B,
+            out,
+            dtype,
+            get_multi_stream_cublas_workspace(),
+            grad=grad,
+            accumulate=accumulate,
+            layout=layout,
+        )
+
+
 
 @pytest.mark.parametrize(
     "shape",

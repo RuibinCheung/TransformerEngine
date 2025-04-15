@@ -17,6 +17,7 @@
 
 #include <cstdint>
 #include <mutex>
+#include <chrono>
 
 #include "../common.h"
 #include "../util/vectorized_pointwise.h"
@@ -534,24 +535,48 @@ void nvte_multi_stream_cublas_gemm(const NVTETensor *A, const NVTETensor *B, NVT
     NVTE_CHECK_CUDA(cudaStreamWaitEvent(compute_streams[s], cublas_event[0]));
   }
 
-  for (int i = 0; i < num_gemms; i++) {
-#ifdef __HIP_PLATFORM_AMD__
-    nvte_cublas_gemm_with_handle(A[i], B[i], D[i], bias[i], pre_gelu_out[i], transa, transb, grad,
-                                 workspace[i % num_streams], accumulate, use_split_accumulator, math_sm_count,
-                                 compute_streams[i % num_streams], hipblaslt_handles[i % num_streams]);
-#else
-    nvte_cublas_gemm(A[i], B[i], D[i], bias[i], pre_gelu_out[i], transa, transb, grad,
-                     workspace[i % num_streams], accumulate, use_split_accumulator, math_sm_count,
-                     compute_streams[i % num_streams]);
-#endif // __HIP_PLATFORM_AMD__
+  double flop = 0;
+
+  auto start = std::chrono::high_resolution_clock::now();
+ 
+  constexpr int test_times = 100;
+  for (int iter = 0; iter < test_times; iter++) {
+    for (int i = 0; i < num_gemms; i++) {
+  #ifdef __HIP_PLATFORM_AMD__
+      nvte_cublas_gemm_with_handle(A[i], B[i], D[i], bias[i], pre_gelu_out[i], transa, transb, grad,
+                                  workspace[i % num_streams], accumulate, use_split_accumulator, math_sm_count,
+                                  compute_streams[i % num_streams], hipblaslt_handles[i % num_streams]);
+  #else
+      nvte_cublas_gemm(A[i], B[i], D[i], bias[i], pre_gelu_out[i], transa, transb, grad,
+                      workspace[i % num_streams], accumulate, use_split_accumulator, math_sm_count,
+                      compute_streams[i % num_streams]);
+  #endif // __HIP_PLATFORM_AMD__
+      const Tensor *inputA = reinterpret_cast<const Tensor *>(A[i]);
+      const Tensor *inputB = reinterpret_cast<const Tensor *>(B[i]);
+      Tensor *outputD = reinterpret_cast<Tensor *>(D[i]);
+
+      const int m = transa ? inputA->data.shape[0] : inputA->data.shape[1];
+      const int k = transa ? inputA->data.shape[1] : inputA->data.shape[0];
+      const int n = transb ? inputB->data.shape[1] : inputB->data.shape[0];
+
+      flop += 2.0*m*n*k;
+    }
+    // record events on compute streams
+    for (int s = 0; s < num_stream_used; s++) {
+      NVTE_CHECK_CUDA(cudaEventRecord(cublas_event[s], compute_streams[s]));
+    }
+    // wait for all compute streams to finish
+    for (int s = 0; s < num_stream_used; s++) {
+      NVTE_CHECK_CUDA(cudaStreamWaitEvent(stream, cublas_event[s]));
+    }
+    for (int s = 0; s < num_stream_used; s++) {
+      NVTE_CHECK_CUDA(cudaStreamSynchronize(compute_streams[s]));
+    }
   }
 
-  // record events on compute streams
-  for (int s = 0; s < num_stream_used; s++) {
-    NVTE_CHECK_CUDA(cudaEventRecord(cublas_event[s], compute_streams[s]));
-  }
-  // wait for all compute streams to finish
-  for (int s = 0; s < num_stream_used; s++) {
-    NVTE_CHECK_CUDA(cudaStreamWaitEvent(stream, cublas_event[s]));
-  }
+  auto end = std::chrono::high_resolution_clock::now();
+  std::chrono::duration<double,std::micro> diff = end-start;
+
+  double cpu_time = diff.count()/1000;
+  std::cout << "Tflops: " << flop / 1.E9 / cpu_time << ", Tflop: " << flop << ", cpu time: " << cpu_time << " ms" << std::endl;
 }
