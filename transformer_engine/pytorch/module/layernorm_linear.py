@@ -448,7 +448,7 @@ class _LayerNormLinear(torch.autograd.Function):
             (
                 grad_output,
                 grad_output_c,
-                grad_output_t,
+                _,
                 grad_bias,
             ) = TransformerEngineBaseModule.grad_output_preprocess(
                 ctx, grad_outputs[0], ctx.parallel_mode == "row"
@@ -534,7 +534,7 @@ class _LayerNormLinear(torch.autograd.Function):
 
                 # DGRAD: Evaluated unconditionally to feed into Linear backward
                 _ = tex.fp8_gemm(
-                    weight_fp8.transpose_2d(),
+                    weight_fp8._data,
                     weight_fp8._scale_inv,
                     0,
                     weight_fp8._fp8_dtype,
@@ -556,8 +556,8 @@ class _LayerNormLinear(torch.autograd.Function):
                     out_index=out_index,
                     fp8_meta_tensor=meta_tensor,
                     D_dtype=out_te_type,
+                    layout="NN",
                 )
-                clear_tensor_data(grad_output_c)
             else:
                 # DGRAD: Evaluated unconditionally to feed into Linear backward
                 _, _, _ = tex.gemm(
@@ -603,16 +603,19 @@ class _LayerNormLinear(torch.autograd.Function):
                         else:
                             dgrad = ub_obj_dgrad.get_ubuf_output(0)
                     if not ctx.fp8_meta["recipe"].override_linear_precision.wgrad:
-                        ln_out_total_t = tex.fp8_transpose(ln_out_total, fp8_dtype_forward)
                         wgrad, _ = tex.fp8_gemm(
-                            ln_out_total_t,
+                            (
+                                ln_out_total._data
+                                if isinstance(ln_out_total, Float8Tensor)
+                                else ln_out_total
+                            ),
                             ln_out_scale_inv,
                             0,
                             fp8_dtype_forward,
                             (
-                                grad_output_t._data
-                                if isinstance(grad_output_t, Float8Tensor)
-                                else grad_output_t
+                                grad_output_c._data
+                                if isinstance(grad_output_c, Float8Tensor)
+                                else grad_output_c
                             ),
                             ctx.fp8_meta["scaling_bwd"].scale_inv,
                             tex.FP8BwdTensors.GRAD_OUTPUT1,
@@ -627,8 +630,9 @@ class _LayerNormLinear(torch.autograd.Function):
                             ),
                             ub=ub_obj_dgrad if ctx.ub_bulk_wgrad else None,
                             extra_output_tensor=extra_output_tensor,
+                            layout="NT",
                         )
-                        clear_tensor_data(ln_out_total_t, grad_output_t)
+                        clear_tensor_data(grad_output_c)
                     else:
                         ln_out_total_c = torch.ops.tex_ts.cast_from_fp8_ts(
                             ln_out_total,
