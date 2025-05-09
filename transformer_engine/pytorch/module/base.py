@@ -905,10 +905,7 @@ class TransformerEngineBaseModule(torch.nn.Module, ABC):
                 grad_output_c = grad_output_mat
             if not ctx.ub_overlap_ag:
                 grad_output_c, _ = gather_along_first_dim(grad_output_c, ctx.tp_group)
-                if not isinstance(grad_output_c, Float8Tensor):
-                    grad_output_t = tex.fp8_transpose(grad_output_c, fp8_dtype_backward)
-                else:
-                    grad_output_t = grad_output_c.transpose_2d()
+                grad_output_t = None
             else:
                 grad_output_c = ctx.ub_obj_gradout.get_ubuf_output(1)
                 grad_output_t = None
@@ -926,13 +923,14 @@ class TransformerEngineBaseModule(torch.nn.Module, ABC):
                 tex.FP8BwdTensors.GRAD_OUTPUT1,
                 fp8_dtype_backward,
             )
+            grad_output_t = None
         else:
             if not ctx.fp8_meta["recipe"].override_linear_precision.wgrad:
                 if isinstance(grad_output_mat, Float8Tensor):
                     grad_output_c = grad_output_mat
-                    grad_output_t = grad_output_c.transpose_2d()
+                    grad_output_t = None 
                 else:
-                    grad_output_c, grad_output_t = fp8_cast_transpose_fused(
+                    grad_output_c, _ = fp8_cast_transpose_fused(
                         grad_output_mat,
                         ctx.fp8_meta["scaling_bwd"],
                         tex.FP8BwdTensors.GRAD_OUTPUT1,
@@ -1084,21 +1082,6 @@ class TransformerEngineBaseModule(torch.nn.Module, ABC):
             data = torch.empty_like(tensor, dtype=torch.uint8)
             scale_inv = torch.empty([1], dtype=torch.float32, device=tensor.device)
 
-            # Transpose cache
-            with_transpose_cache = torch.is_grad_enabled()
-            if (
-                not with_transpose_cache
-                and is_fp8_activation_recompute_enabled()
-                and not in_fp8_activation_recompute_phase()
-            ):
-                with_transpose_cache = True
-            data_transpose = None
-            if with_transpose_cache:
-                data_transpose = torch.empty(
-                    (tensor.size(-1), tensor.numel() // tensor.size(-1)),
-                    dtype=torch.uint8,
-                    device=tensor.device,
-                )
 
             # Construct FP8 tensor
             out = Float8Tensor(
@@ -1109,7 +1092,6 @@ class TransformerEngineBaseModule(torch.nn.Module, ABC):
                 fp8_dtype=fp8_dtype,
                 fp8_scale_inv=scale_inv,
                 dtype=tensor.dtype,
-                data_transpose=data_transpose,
             )
 
             # Update cache

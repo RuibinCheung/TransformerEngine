@@ -632,7 +632,7 @@ class _LayerNormLinear(torch.autograd.Function):
                             extra_output_tensor=extra_output_tensor,
                             layout="NT",
                         )
-                        clear_tensor_data(grad_output_c)
+                        clear_tensor_data(ln_out_total, grad_output_c)
                     else:
                         ln_out_total_c = torch.ops.tex_ts.cast_from_fp8_ts(
                             ln_out_total,
@@ -1193,16 +1193,7 @@ class LayerNormLinear(TransformerEngineBaseModule):
             # Initialize FP8 weights if needed
             weight_fp8 = None
             if self.fp8:
-                if isinstance(weight_tensor, Float8Tensor):
-                    # Make sure transpose cache is valid, if present
-                    # Note: Transpose cache may have been invalidated
-                    # externally, e.g. by optimizer.
-                    if weight_tensor._transpose is not None:
-                        weight_tensor.transpose_2d(
-                            fill_cache=True,
-                            noop_flag=skip_fp8_weight_update,
-                        )
-                else:
+                if not isinstance(weight_tensor, Float8Tensor):
                     # FP8 cast to workspace buffer
                     update_workspace = is_first_microbatch is None or is_first_microbatch
                     weight_fp8 = self.get_fp8_workspace(

@@ -498,7 +498,7 @@ class _Linear(torch.autograd.Function):
             (
                 grad_output,
                 grad_output_c,
-                grad_output_t,
+                _,
                 grad_bias,
             ) = TransformerEngineBaseModule.grad_output_preprocess(
                 ctx, grad_output, ctx.parallel_mode == "row"
@@ -560,7 +560,7 @@ class _Linear(torch.autograd.Function):
             if ctx.requires_dgrad:
                 if ctx.fp8:
                     _ = fp8_gemm(
-                        weight_fp8.transpose_2d(),
+                        weight_fp8._data,
                         weight_fp8._scale_inv,
                         0,
                         weight_fp8._fp8_dtype,
@@ -578,6 +578,7 @@ class _Linear(torch.autograd.Function):
                         fp8_meta_tensor=meta_tensor,
                         D_dtype=output_te_dtype,
                         extra_output_tensor=rs_out,
+                        layout="NN",
                     )
 
                     if ctx.ub_overlap_rs_dgrad:
