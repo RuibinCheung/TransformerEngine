@@ -8,6 +8,8 @@ project(ck_fused_attn LANGUAGES HIP CXX)
 
 set(CK_FUSED_ATTN_TARGET_GPUS "gfx942" CACHE STRING "Target Architecture to build ck_fused_attn backend")
 
+set(CK_FUSED_ATTN_GENERATE_RECEIPT 2)
+
 # remove files that should be regenerated
 file(REMOVE_RECURSE ${CMAKE_CURRENT_BINARY_DIR}/gen_src/tmp ${CMAKE_CURRENT_BINARY_DIR}/gen_src/blob_list.txt)
 
@@ -24,7 +26,7 @@ execute_process(
 #bwd kernels list
 execute_process(
   COMMAND python3 ${__CK_SOURCE_DIR}/example/ck_tile/01_fmha/generate.py
-  --api bwd --list_blobs ${CMAKE_CURRENT_BINARY_DIR}/gen_src/bwd_blob_list.txt --receipt 3
+  --api bwd --list_blobs ${CMAKE_CURRENT_BINARY_DIR}/gen_src/bwd_blob_list.txt --receipt ${CK_FUSED_ATTN_GENERATE_RECEIPT}
 )
 
 file(STRINGS ${CMAKE_CURRENT_BINARY_DIR}/gen_src/fwd_blob_list.txt FMHA_FWD_GEN_BLOBS)
@@ -39,7 +41,7 @@ execute_process(
 # generate the actual bwd kernel cpp files
 execute_process(
   COMMAND python3 ${__CK_SOURCE_DIR}/example/ck_tile/01_fmha/generate.py
-  --api bwd --output_dir ${CMAKE_CURRENT_BINARY_DIR}/gen_src/tmp --receipt 3
+  --api bwd --output_dir ${CMAKE_CURRENT_BINARY_DIR}/gen_src/tmp --receipt ${CK_FUSED_ATTN_GENERATE_RECEIPT}
 )
 
 set(ck_fused_attn_SOURCES)
