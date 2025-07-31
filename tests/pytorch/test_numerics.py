@@ -2149,6 +2149,131 @@ def test_my_grouped_gemm(test_case):
             layout=layout,
         )
 
+@pytest.mark.parametrize(
+    "test_case",
+    [
+        (8,4096,4096,8192,"TN"),
+        (8,8192,4096,4096,"TN"),
+        (8,4096,8192,4096,"TN"),
+        (8,4096,2048,8192,"TN"),
+        (8,8192,2048,4096,"TN"),
+        (8,4096,8192,2048,"TN"),
+
+        (7,4096,4096,8192,"TN"),
+        (7,8192,4096,4096,"TN"),
+        (7,4096,8192,4096,"TN"),
+        (7,4096,2048,8192,"TN"),
+        (7,8192,2048,4096,"TN"),
+        (7,4096,8192,2048,"TN"),
+    ],
+)
+def test_my_fp8_grouped_gemm(test_case):
+    accumulate = False
+    dtype = torch.bfloat16
+    fp8_dtype = tex.DType.kFloat8E4M3
+
+    # torch.manual_seed(0)
+    group_count, m, n, k, layout = test_case
+    
+    # fp8 should be robust enough to this fake scale
+    scale = 1 + torch.rand(group_count * 3, dtype=torch.float32, device="cuda")
+    scale_inv = 1 / scale
+    amax = torch.zeros(1024, group_count * 3, dtype=torch.float32, device="cuda")
+
+    
+    warmup = 3
+    print("!!!!!!!!!!!!!!!!!!!!warmup!!!!!!!!!!!!!!!!!!!!!!")
+    for i in range(warmup):
+        A = [torch.randn(m, k, dtype=dtype, device="cuda") for _ in range(group_count)]  # weight
+        B = [torch.randn(n, k, dtype=dtype, device="cuda") for _ in range(group_count)]
+
+        A_fp8 = [
+            torch.ops.tex_ts.cast_to_fp8_ts(
+                A[i],
+                scale,
+                amax,
+                scale_inv,
+                i,  # fp8 meta tensor index
+                fp8_dtype,
+            )
+            for i in range(group_count)
+        ]
+        B_fp8 = [
+            torch.ops.tex_ts.cast_to_fp8_ts(
+                B[i],
+                scale,
+                amax,
+                scale_inv,
+                group_count + i,  # fp8 meta tensor index
+                fp8_dtype,
+            )
+            for i in range(group_count)
+        ]
+
+        out = [torch.randn(m, n, dtype=dtype, device="cuda") for _ in range(group_count)]
+
+        fp8_grouped_gemm(
+            A_fp8,
+            [scale_inv],
+            0,  # A_offset
+            fp8_dtype,
+            B_fp8,
+            scale_inv,
+            group_count,  # B_offset
+            fp8_dtype,
+            out,
+            dtype,
+            get_multi_stream_cublas_workspace(),
+            accumulate=accumulate,
+        )
+
+    test_times = 10
+    print("!!!!!!!!!!!!!!!!!!!!testing!!!!!!!!!!!!!!!!!!!!!!")
+    for i in range(test_times):
+        A = [torch.randn(m, k, dtype=dtype, device="cuda") for _ in range(group_count)]  # weight
+        B = [torch.randn(n, k, dtype=dtype, device="cuda") for _ in range(group_count)]
+
+        A_fp8 = [
+            torch.ops.tex_ts.cast_to_fp8_ts(
+                A[i],
+                scale,
+                amax,
+                scale_inv,
+                i,  # fp8 meta tensor index
+                fp8_dtype,
+            )
+            for i in range(group_count)
+        ]
+        B_fp8 = [
+            torch.ops.tex_ts.cast_to_fp8_ts(
+                B[i],
+                scale,
+                amax,
+                scale_inv,
+                group_count + i,  # fp8 meta tensor index
+                fp8_dtype,
+            )
+            for i in range(group_count)
+        ]
+
+        out = [torch.randn(m, n, dtype=dtype, device="cuda") for _ in range(group_count)]
+
+        fp8_grouped_gemm(
+            A_fp8,
+            [scale_inv],
+            0,  # A_offset
+            fp8_dtype,
+            B_fp8,
+            scale_inv,
+            group_count,  # B_offset
+            fp8_dtype,
+            out,
+            dtype,
+            get_multi_stream_cublas_workspace(),
+            accumulate=accumulate,
+        )
+
+
 
 
 @pytest.mark.parametrize(
