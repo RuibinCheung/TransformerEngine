@@ -95,7 +95,6 @@ class _GroupedLinear(torch.autograd.Function):
             inputmat_scale_inv = torch.empty([num_gemms], dtype=torch.float32, device=inp.device)
             if (
                 not fp8_meta["recipe"].override_linear_precision.wgrad
-                and is_grad_enabled
                 and weights[0].requires_grad
                 and not sequence_parallel
             ):
