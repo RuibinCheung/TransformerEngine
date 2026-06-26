@@ -1,0 +1,60 @@
+diff --git a/include/ck_tile/core/arch/amd_buffer_addressing.hpp b/include/ck_tile/core/arch/amd_buffer_addressing.hpp
+index c639bed01..bcb11e648 100644
+--- a/include/ck_tile/core/arch/amd_buffer_addressing.hpp
++++ b/include/ck_tile/core/arch/amd_buffer_addressing.hpp
+@@ -3090,11 +3090,11 @@ amd_tdm_load(const TDMDescriptor<DataType, TensorRank, IsGatherMode>& descriptor
+     static constexpr auto I4 = number<4>{};
+ 
+     auto tdm_desc_grp = descriptor.getResourceDescriptorGroup();
++    ignore = I4;
+     __builtin_amdgcn_tensor_load_to_lds(tdm_desc_grp.get(I0),
+                                         tdm_desc_grp.get(I1),
+                                         tdm_desc_grp.get(I2),
+                                         tdm_desc_grp.get(I3),
+-                                        tdm_desc_grp.get(I4),
+                                         static_cast<index_t>(coherence));
+ #else
+     ignore = descriptor;
+@@ -3116,11 +3116,11 @@ amd_tdm_store(const TDMDescriptor<DataType, TensorRank, IsGatherMode>& descripto
+     static constexpr auto I4 = number<4>{};
+ 
+     auto tdm_desc_grp = descriptor.getResourceDescriptorGroup();
++    ignore = I4;
+     __builtin_amdgcn_tensor_store_from_lds(tdm_desc_grp.get(I0),
+                                            tdm_desc_grp.get(I1),
+                                            tdm_desc_grp.get(I2),
+                                            tdm_desc_grp.get(I3),
+-                                           tdm_desc_grp.get(I4),
+                                            static_cast<index_t>(coherence));
+ }
+ #else
+diff --git a/include/ck_tile/core/arch/amd_buffer_addressing_builtins.hpp b/include/ck_tile/core/arch/amd_buffer_addressing_builtins.hpp
+index d3dfdd8b4..d8b95df50 100644
+--- a/include/ck_tile/core/arch/amd_buffer_addressing_builtins.hpp
++++ b/include/ck_tile/core/arch/amd_buffer_addressing_builtins.hpp
+@@ -3421,11 +3421,11 @@ amd_tdm_load(const TDMDescriptor<DataType, TensorRank, IsGatherMode>& descriptor
+     static constexpr auto I4 = number<4>{};
+ 
+     auto tdm_desc_grp = descriptor.getResourceDescriptorGroup();
++    ignore = I4;
+     __builtin_amdgcn_tensor_load_to_lds(tdm_desc_grp.get(I0),
+                                         tdm_desc_grp.get(I1),
+                                         tdm_desc_grp.get(I2),
+                                         tdm_desc_grp.get(I3),
+-                                        tdm_desc_grp.get(I4),
+                                         static_cast<index_t>(coherence));
+ #else
+     ignore = descriptor;
+@@ -3447,11 +3447,11 @@ amd_tdm_store(const TDMDescriptor<DataType, TensorRank, IsGatherMode>& descripto
+     static constexpr auto I4 = number<4>{};
+ 
+     auto tdm_desc_grp = descriptor.getResourceDescriptorGroup();
++    ignore = I4;
+     __builtin_amdgcn_tensor_store_from_lds(tdm_desc_grp.get(I0),
+                                            tdm_desc_grp.get(I1),
+                                            tdm_desc_grp.get(I2),
+                                            tdm_desc_grp.get(I3),
+-                                           tdm_desc_grp.get(I4),
+                                            static_cast<index_t>(coherence));
+ #else
+     ignore = descriptor;
